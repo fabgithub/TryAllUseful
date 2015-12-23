@@ -11,14 +11,24 @@
 
 #include "FakeThreadWrap.h"
 #include "FakeThreadTemplate.h"
+#include "FakeThreadLock.h"
 
-#include "tryChangeStackCall.h"
+#include "ftduration.h"
 
 #include <stdio.h>
+#ifdef WIN32
+#else
 #include <sys/time.h>
 #include <unistd.h>
+#endif
 
 #include "cxxtest/TestSuite.h"
+
+const char * NFGetFileNameFromPath(const char *szFilePath);
+
+#ifndef InfoLog
+#define InfoLog( args )  std::cout << " " << NFGetFileNameFromPath(__FILE__) << "(" << __LINE__ << ") " << __FUNCTION__ << ": " args << std::endl
+#endif
 
 class testFakeThreadWrap : public CxxTest::TestSuite
 {
@@ -30,7 +40,8 @@ public:
     static void SomeFunc(void *pParam)
     {
         testFakeThreadWrap *pTS = (testFakeThreadWrap *) pParam;
-        std::string funcName = pTS->mstrCurFunc;
+        std::string funcName;
+        funcName = pTS->mstrCurFunc;
         
         InfoLog( << "before YieldFromFakeThread from " << funcName );
         if(funcName == "testCommon")
@@ -65,33 +76,40 @@ public:
     {
         mResumeForCommon();
         mResumeForYieldWithParam();
+
+        TS_ASSERT_EQUALS(0, GetRunningFakeThreadCount());
     }
     void testReuseFakeThread()
     {
         mstrCurFunc = "testReuseFakeThread";
         RunFuncInFakeThread(SomeFunc, this);
+        TS_ASSERT_EQUALS(0, GetRunningFakeThreadCount());
     }
     
     class ResumeParam : public FakeThreadResumeParam
     {
     public:
+        std::string mstrName;
+        ResumeParam() : mstrName("ResumeParam") {}
         virtual const char *FtsParamType() const
         {
-            static char gszType[] = "ResumeParam";
-            return gszType;
+//            static char gszType[] = "ResumeParam";
+            return mstrName.c_str();
         }
     };
     class ResumeParam2 : public FakeThreadResumeParam
     {
     public:
+        std::string mstrName;
+        ResumeParam2() : mstrName("ResumeParam2") {}
         virtual const char *FtsParamType() const
         {
-            static char gszType[] = "ResumeParam2";
-            return gszType;
+//            static char gszType[] = "ResumeParam2";
+            return mstrName.c_str();
         }
     };
     // =================================================
-    // test resume another fake thread
+    // test resume another fake thread in some fake thread
     FakeThreadResumeObject gResume_testResumeInFakeThread_func1_Obj;
     FakeThreadResumeObject gResume_testResumeInFakeThread_func1_Obj_nouse;
     
@@ -111,6 +129,7 @@ public:
         pTS->gResume_testResumeInFakeThread_func1_Obj = GetResumeObjectForFakeThread();
         TS_ASSERT_EQUALS(pTS->gResume_testResumeInFakeThread_func1_Obj.IsValid(), true);
         nYieldRes = YieldFromFakeThread(&pResumeParam);
+        TS_ASSERT_EQUALS(pTS->gResume_testResumeInFakeThread_func1_Obj.IsValid(), false);
         TS_ASSERT(pResumeParam && strcmp(pResumeParam->FtsParamType(), "ResumeParam") == 0);
         TS_ASSERT_EQUALS(nYieldRes, 0);
         InfoLog( << "after yield 1" );
@@ -121,7 +140,9 @@ public:
         pTS->gResume_testResumeInFakeThread_func1_Obj = GetResumeObjectForFakeThread();
         pTS->gResume_testResumeInFakeThread_func1_Obj_nouse = GetResumeObjectForFakeThread();
         TS_ASSERT_EQUALS(pTS->gResume_testResumeInFakeThread_func1_Obj.IsValid(), true);
+        pResumeParam = NULL;
         nYieldRes = YieldFromFakeThread(&pResumeParam);
+        TS_ASSERT_EQUALS(pTS->gResume_testResumeInFakeThread_func1_Obj.IsValid(), false);
         TS_ASSERT(pResumeParam && strcmp(pResumeParam->FtsParamType(), "ResumeParam2") == 0);
         TS_ASSERT_EQUALS(nYieldRes, 0);
         InfoLog( << "after yield 2" );
@@ -154,6 +175,8 @@ public:
         RunFuncInFakeThread(ResumeInFakeThread_func2, this);
         int nResumeRes = gResume_testResumeInFakeThread_func1_Obj(&rp);
         TS_ASSERT_EQUALS(nResumeRes, -1);
+
+        TS_ASSERT_EQUALS(0, GetRunningFakeThreadCount());
     }
     static void ForTestMemory(void *pParam)
     {
@@ -166,26 +189,34 @@ public:
     }
     void testMemorySizeForFakeThread()
     {
-        // alloc 100 fake thread, see how much memory is it.
-        std::list<FakeThreadResumeObject> allFakeObj;
-        int nCount = 20;
-        for (; nCount > 0; --nCount)
+        // alloc 100 thread, see memory
         {
-            RunFuncInFakeThread(ForTestMemory, (void *) &allFakeObj);
+            std::list<FakeThreadResumeObject> allFakeObj;
+            int nCount = 20;
+            for (; nCount > 0; --nCount)
+            {
+                RunFuncInFakeThread(ForTestMemory, (void *) &allFakeObj);
+            }
+            InfoLog( << "finish." );
+            std::cout << std::endl;
+            std::cout << std::endl;
         }
-        InfoLog( << "finish." );
-        std::cout << std::endl;
-        std::cout << std::endl;
+        TS_ASSERT_EQUALS(0, GetRunningFakeThreadCount());
     }
     void testMemorySizeForFakeThread2()
     {
-        for(int i = 0;i < 1000;i++)
+        ftduration d;
+        int nTotalCount = 10 * 1000;
+        for(int i = 0;i < nTotalCount;i++)
         {
             RunFuncInFakeThread(ForTestMemory, NULL);
         }
         InfoLog( << "finish." );
+        InfoLog( << "RunFuncInFakeThread call can be " << nTotalCount / d.durationSecond() << " per second." );
         std::cout << std::endl;
         std::cout << std::endl;
+        
+        TS_ASSERT_EQUALS(0, GetRunningFakeThreadCount());
     }
     // test resume performence
     class ResumeParamForCount : public FakeThreadResumeParam
@@ -204,12 +235,12 @@ public:
     static void ForTestResumeCount(void *pParam)
     {
         FakeThreadResumeParam *pRp = NULL;
-        pthread_attr_t attr;
-        pthread_attr_init(&attr);
-        size_t nStackSize = 0;
-        pthread_attr_getstacksize(&attr, &nStackSize);
-        char szFillStack[10 * 50 * 1024] = "";
-        szFillStack[0] = 0;
+        //pthread_attr_t attr;
+        //pthread_attr_init(&attr);
+        //size_t nStackSize = 0;
+        //pthread_attr_getstacksize(&attr, &nStackSize);
+//        char szFillStack[10 * 50 * 1024] = "";
+//        szFillStack[0] = 0;
         FakeThreadResumeObject *pResumeObj = (FakeThreadResumeObject *) pParam;
         while (true)
         {
@@ -233,24 +264,24 @@ public:
     }
     void testResumeCount()
     {
-        ResumeParamForCount rp;
-        FakeThreadResumeObject resumeObj;
-        RunFuncInFakeThread(ForTestResumeCount, &resumeObj);
-        struct timeval tvStart, tvEnd;
-        gettimeofday(&tvStart, NULL);
-        int nTotalCount = 10;
-//         nTotalCount = 10 * 1000 * 1000;
-        for (int i = 0; i < nTotalCount; ++i)
         {
-            rp.mnIndex = i;
-            resumeObj(&rp);
+            ResumeParamForCount rp;
+            FakeThreadResumeObject resumeObj;
+            RunFuncInFakeThread(ForTestResumeCount, &resumeObj);
+            ftduration d;
+            int nTotalCount = 10;
+    //         nTotalCount = 10 * 1000 * 1000;
+            for (int i = 0; i < nTotalCount; ++i)
+            {
+                rp.mnIndex = i;
+                resumeObj(&rp);
+            }
+    //        resumeObj();
+            InfoLog( << "yield resume call can be " << nTotalCount / d.durationSecond() << " per second." );
         }
-//        resumeObj();
-        gettimeofday(&tvEnd, NULL);
-        double dDuration = (tvEnd.tv_sec - tvStart.tv_sec) + (tvEnd.tv_usec - tvStart.tv_usec) / 1000000.0;
-        InfoLog( << "yield resume call can be " << nTotalCount / dDuration << " per second." );
+        TS_ASSERT_EQUALS(0, GetRunningFakeThreadCount());
     }
-    // test performence
+    // test template function group performence
     ResumeFakeThreadObjT1<int> mResumeObj_ForTestResumeCountT;
     static void ForTestResumeCountT(testFakeThreadWrap *pThis, const std::string info, ResumeFakeThreadObjT1<int> *pResumeObj)
     {
@@ -278,8 +309,7 @@ public:
         const std::string info("t");
         ResumeFakeThreadObjT1<int> resumeObj;
         RunInFakeThreadT(ForTestResumeCountT, this, info, &resumeObj);
-        struct timeval tvStart, tvEnd;
-        gettimeofday(&tvStart, NULL);
+        ftduration d;
         int nTotalCount = 10;
 //         nTotalCount = 10 * 1000 * 1000;
         for (int i = 0; i < nTotalCount; ++i)
@@ -287,9 +317,9 @@ public:
             resumeObj(i);
         }
         resumeObj(-1);
-        gettimeofday(&tvEnd, NULL);
-        double dDuration = (tvEnd.tv_sec - tvStart.tv_sec) + (tvEnd.tv_usec - tvStart.tv_usec) / 1000000.0;
-        InfoLog( << "yield resume call can be " << nTotalCount / dDuration << " per second." );
+        InfoLog( << "yield resume call can be " << nTotalCount / d.durationSecond() << " per second." );
+        
+        TS_ASSERT_EQUALS(0, GetRunningFakeThreadCount());
     }
     
     static void FuncForTemplate_Common(double d)
@@ -322,28 +352,69 @@ public:
     
     void testFakeThreadTemplate_Common()
     {
-        RunInFakeThreadT(.5, FuncForTemplate_Common, 123.56);
+        RunInFakeThreadT(.15, FuncForTemplate_Common, 123.56);
         RunInFakeThreadT(FuncForTemplate_Common2, 123.56, "abc");
         RunInFakeThreadT(.1, FuncForTemplate_Common3, this, std::string("in string param"), 987);
         
         while(fttimer_count() > 0)
         {
-            sleep(1);
+#ifdef WIN32
+            Sleep(10);
+#else
+            usleep(1000);
+#endif
             fttimer_do();
         }
         InfoLog( << "end" );
+        
+        TS_ASSERT_EQUALS(1, GetRunningFakeThreadCount());
     }
     void testFakeThreadTemplate_Start()
     {
         mResumeT1("Resume with parameter");
+        TS_ASSERT_EQUALS(0, GetRunningFakeThreadCount());
     }
     void testFakeThreadTemplate_Yield()
     {
         
     }
+    // test fake thread lock
+    static void FuncForLockTest(FakeThreadResumeObject * resumeObj, int *nTestNum, int nIndex)
+    {
+        InfoLog( << "[" << nIndex << "] before protected" );
+        FtProtectFunction();
+        InfoLog( << "[" << nIndex << "] after protected" );
+        
+        *resumeObj = GetResumeObjectForFakeThread();
+        InfoLog( << "[" << nIndex << "] before yield" );
+        YieldFromFakeThread();
+        InfoLog( << "[" << nIndex << "] after yield" );
+    }
     void testFakeThreadTemplate_Resume()
     {
-        
+        {
+            FakeThreadResumeObject resumeObj1, resumeObj2, resumeObj3, resumeObj4;
+            int nTestNum = 0;
+            RunInFakeThreadT(FuncForLockTest, &resumeObj1, &nTestNum, 1);
+            RunInFakeThreadT(FuncForLockTest, &resumeObj2, &nTestNum, 2);
+            RunInFakeThreadT(FuncForLockTest, &resumeObj3, &nTestNum, 3);
+            RunInFakeThreadT(FuncForLockTest, &resumeObj4, &nTestNum, 4);
+            
+            TS_ASSERT(resumeObj1.IsValid());
+            TS_ASSERT(!resumeObj2.IsValid());
+            TS_ASSERT(!resumeObj3.IsValid());
+            TS_ASSERT(!resumeObj4.IsValid());
+            resumeObj1();
+            TS_ASSERT(resumeObj2.IsValid());
+            TS_ASSERT(!resumeObj3.IsValid());
+            TS_ASSERT(!resumeObj4.IsValid());
+            resumeObj2();
+            TS_ASSERT(resumeObj3.IsValid());
+            TS_ASSERT(!resumeObj4.IsValid());
+            resumeObj3();
+            TS_ASSERT(resumeObj4.IsValid());
+        }
+        TS_ASSERT_EQUALS(0, GetRunningFakeThreadCount());
     }
 };
 

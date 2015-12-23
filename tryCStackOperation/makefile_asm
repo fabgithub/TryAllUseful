@@ -1,0 +1,32 @@
+
+all : FakeThreadStackOperation_win64.obj FakeThreadStackOperation_win32.obj FakeThreadStackOperation_mac.o FakeThreadStackOperation_x86.o testFakeThreadWrap.cpp FakeThreadStackOperation_linux32.o FakeThreadStackOperation_linux64.o
+
+TEST_SUITE_HEADER_FILES = \
+	testFakeThreadWrap.h
+
+TEST_MAIN_CPP=testFakeThreadWrap.cpp
+
+${TEST_MAIN_CPP} : makefile $(TEST_SUITE_HEADER_FILES)
+	cxxtestgen -w jx --main=testFakeThreadWrap_main --error-printer -o ${TEST_MAIN_CPP} $(TEST_SUITE_HEADER_FILES)
+
+FakeThreadStackOperation_win32.obj : FakeThreadStackOperation_x86.s makefile
+	./nasm -f win32 -o FakeThreadStackOperation_win32.obj FakeThreadStackOperation_x86.s
+
+FakeThreadStackOperation_win64.obj : FakeThreadStackOperation_win64.s makefile
+	./nasm -f win64 -o FakeThreadStackOperation_win64.obj FakeThreadStackOperation_win64.s
+
+FakeThreadStackOperation_mac.o : FakeThreadStackOperation_mac.s makefile
+	./nasm -f macho64 -o FakeThreadStackOperation_mac.o FakeThreadStackOperation_mac.s
+
+FakeThreadStackOperation_x86.o : FakeThreadStackOperation_x86.s makefile
+	./nasm -f macho32 -o FakeThreadStackOperation_x86.o FakeThreadStackOperation_x86.s
+
+FakeThreadStackOperation_linux32.o : FakeThreadStackOperation_x86.s makefile
+	./nasm -f elf32 -o FakeThreadStackOperation_linux32.o FakeThreadStackOperation_x86.s
+
+FakeThreadStackOperation_linux64.o : FakeThreadStackOperation_mac.s makefile
+	./nasm -f elf64 -o FakeThreadStackOperation_linux64.o FakeThreadStackOperation_mac.s
+
+
+clean :
+	rm -f testFakeThreadWrap.cpp StackOperation.o

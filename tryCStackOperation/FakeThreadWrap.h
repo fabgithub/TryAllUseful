@@ -9,21 +9,24 @@
 #ifndef __TestAllUseful__FakeThreadWrap__
 #define __TestAllUseful__FakeThreadWrap__
 
+#include "ftnet_export.h"
 #include <stdio.h>
+#include <string>
+#include <list>
 
 typedef void (*FakeThreadProc) ( void * );
 
 class RealFkResumeObj;
 
 // resume时的参数基类
-class FakeThreadResumeParam
+class FTNET_API FakeThreadResumeParam
 {
 public:
     virtual ~FakeThreadResumeParam();
     virtual const char *FtsParamType() const = 0;
 };
 
-class FakeThreadResumeObject
+class FTNET_API FakeThreadResumeObject
 {
 public:
     FakeThreadResumeObject();
@@ -40,13 +43,50 @@ public:
     bool IsValid() const;
     void Detach();
 private:
-    RealFkResumeObj *mpResumeObj;
+    mutable RealFkResumeObj *mpResumeObj;
 };
 
-int RunFuncInFakeThread(FakeThreadProc ftp, void *pParam);
-int YieldFromFakeThread(FakeThreadResumeParam **pOutResumeParam = NULL);
-FakeThreadResumeObject GetResumeObjectForFakeThread();
+FTNET_API int RunFuncInFakeThread(FakeThreadProc ftp, void *pParam);
+FTNET_API int YieldFromFakeThread(FakeThreadResumeParam **pOutResumeParam = NULL);
+FTNET_API FakeThreadResumeObject GetResumeObjectForFakeThread();
 
-void FakeThreadPrintCallStack(void);
+FTNET_API int FakeThreadSetName(const char *szFakeThreadName);
+FTNET_API const char *FakeThreadGetName(bool bNullWhenInMain = false);
+
+class FTNET_API FakeThreadStackHelper
+{
+    FakeThreadStackHelper(const FakeThreadStackHelper &);
+    FakeThreadStackHelper & operator = (const FakeThreadStackHelper &);
+public:
+    FakeThreadStackHelper(const char *szFuncName, const char *szFile, int nLine);
+    ~FakeThreadStackHelper();
+};
+
+class FTNET_API FtStackInfo
+{
+public:
+    FtStackInfo();
+    FtStackInfo(const std::string &strName, const std::string &strFile, int nLine);
+public:
+    std::string mstrName;
+    std::string mstrFile;
+    int mnLine;
+};
+
+typedef std::list<FtStackInfo> FtStackInfoList;
+typedef std::list<FtStackInfoList> FakeThreadInfoList;
+
+FTNET_API FtStackInfoList FakeThreadGetStack();
+FTNET_API FakeThreadInfoList FakeThreadGetAllStack();
+
+FTNET_API unsigned int GetRunningFakeThreadCount();
+
+FTNET_API void FakeThreadPrintCallStack(void);
+
+#if FAKE_THREAD_NO_STACK_RECORDER
+#define FakeThreadRecordStack()
+#else
+#define FakeThreadRecordStack() FakeThreadStackHelper _ft_stack_recorder(__FUNCTION__, __FILE__, __LINE__)
+#endif
 
 #endif /* defined(__TestAllUseful__FakeThreadWrap__) */

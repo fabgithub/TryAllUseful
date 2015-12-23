@@ -17,6 +17,10 @@
 #include <list>
 
 #include <algorithm>
+
+#ifdef WIN32
+#define strcasecmp stricmp
+#endif
 //
 typedef int (*fc_InitForList_fn) (FastConfigFormat &fs, unsigned int nSlotPos);
 //
@@ -287,11 +291,14 @@ static int _fc_load_xml_string(CMarkupSTL &xml, const char *szXmlText)
 static int _fc_load_xml_string(rapidxml::xml_document<> &xml, const char *szXmlText)
 {
     int nRet = -1;
-    try {
-        xml.parse<0>((char *) szXmlText);
-        nRet = 0;
-    } catch (std::exception &e) {
-        nRet = -1;
+    if(szXmlText && szXmlText[0])
+    {
+        try {
+            xml.parse<0>((char *) szXmlText);
+            nRet = 0;
+        } catch (std::exception &) {
+            nRet = -1;
+        }
     }
     return nRet;
 }
@@ -335,7 +342,7 @@ int fcInitConfigWithMarkupSTL(const char *szXmlText, FastConfigFormat &fcf)
     }while(false);
     return nRet;
 }
-int (*fcInitConfig) (const char *szXmlText, FastConfigFormat &fcf) = fcInitConfigWithMarkupSTL;
+FTNET_API int (*fcInitConfig) (const char *szXmlText, FastConfigFormat &fcf) = fcInitConfigWithMarkupSTL;
 //int (*fcInitConfig) (const char *szXmlText, FastConfigFormat &fcf) = fcInitConfigWithRapidXml;
 void fcSetUseRapidXml(bool bUse)
 {
@@ -444,6 +451,7 @@ _fcImplementBasicRegisterVar(unsigned int)
 _fcImplementBasicRegisterVar(long)
 _fcImplementBasicRegisterVar(unsigned long)
 _fcImplementBasicRegisterVar(bool)
+_fcImplementBasicRegisterVar(double)
 _fcImplementBasicRegisterVar(std::string)
 
 //

@@ -3,7 +3,7 @@
 //  tryFtSocket
 //
 //  Created by liyoudi on 15/2/26.
-//  Copyright (c) 2015Äê liyoudi. All rights reserved.
+//  Copyright (c) 2015 liyoudi. All rights reserved.
 //
 
 #include <iostream>
@@ -40,8 +40,7 @@ const char * NFGetFileNameFromPath(const char *szFilePath)
 
 int test_ftsocket_main( int argc, char *argv[] );
 
-int main(int argc, char * argv[]) {
+int tryFtSocket_main(int argc, char * argv[]) {
     // insert code here...
-    test_ftsocket_main(argc, argv);
-    return 0;
+    return test_ftsocket_main(argc, argv);
 }

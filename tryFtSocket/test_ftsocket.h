@@ -3,7 +3,7 @@
 //  TestAllUseful
 //
 //  Created by liyoudi on 15/2/27.
-//  Copyright (c) 2015年 liyoudi. All rights reserved.
+/*  Copyright (c) 2015 liyoudi. All rights reserved. */
 //
 
 #ifndef TestAllUseful_test_ftsocket_h
@@ -14,16 +14,25 @@
 #include "ftnetselect.h"
 
 #include "ftduration.h"
+#include "ftnetbuffer.h"
 
 #include <stdio.h>
-#include <sys/time.h>
-#include <unistd.h>
+#include <stdlib.h>
+
+#ifdef WIN32
+    #include <windows.h>
+#else
+    #include <sys/time.h>
+    #include <unistd.h>
+#include <sys/signal.h>
+#endif
 
 #include "cxxtest/TestSuite.h"
 
 const char * NFGetFileNameFromPath(const char *szFilePath);
-
+#ifndef InfoLog
 #define InfoLog( args ) std::cout << " " << NFGetFileNameFromPath(__FILE__) << "(" << __LINE__ << ") " << __FUNCTION__ << ": " args << std::endl
+#endif
 
 class test_ftsocket : public CxxTest::TestSuite
 {
@@ -31,9 +40,10 @@ class test_ftsocket : public CxxTest::TestSuite
 public:
     void setUp()
     {
+#ifndef WIN32
         signal(SIGPIPE, SIG_IGN);
         signal(SIGPIPE, SIG_IGN);
-
+#endif
         mnFinished = 0;
         
         mbHasConnected = 0;
@@ -71,12 +81,13 @@ public:
         TS_ASSERT_EQUALS(nRet, 0);
         if(nRet)
         {
-            InfoLog( << "bind failed." );
+            InfoLog( << "bind on " << szBindIp << ":" << nBindPort << " failed with " << svrSock.LastErrorNo() << ": " << svrSock.LastError() );
+            pThis->mnHasSvrOk = -2;
             return;
         }
         nRet = svrSock.Accept(cliSock);
         TS_ASSERT_EQUALS(nRet, 0);
-        InfoLog( << "accept a client." );
+        InfoLog( << "accept a client " << cliSock );
         // recv
         char *buf = new char[pThis->mnClientSendSize + 10];
         memset(buf, 0, pThis->mnClientSendSize + 10);
@@ -176,7 +187,7 @@ public:
         RunInFakeThreadT(ConnectProc, this, szIp, nPort);
         int nCount = 0;
         InfoLog( << "enter loop" );
-        while(nCount < 200 && !mbHasConnected)
+        while(/* nCount < 200 && */ !mbHasConnected)
         {
             if(ftnetSelect(100) <= 0)
             {
@@ -185,21 +196,286 @@ public:
         }
         TS_ASSERT_EQUALS(mbHasConnected, 1);
         TS_ASSERT_EQUALS(mnHasSvrOk, 1);
-//        sleep(3);
+        
+        TS_ASSERT_EQUALS(0, GetRunningFakeThreadCount());
+    }
+    class InfoForConnect
+    {
+    public:
+        InfoForConnect()
+        {
+            mstrSvrIp = mstrCliIp = "127.0.0.1";
+            mnSvrPort = 9999;
+            mnCliPort = 9998;
+            mbFinished = false;
+        }
+    public:
+        std::string mstrSvrIp, mstrCliIp;
+        unsigned int mnSvrPort, mnCliPort;
+        bool mbFinished;
+    };
+    static void FuncServer_ForConnect(InfoForConnect *pIFC)
+    {
+        ftsocket sock;
+        int nRet = 0;
+        nRet = sock.Bind(pIFC->mstrSvrIp.c_str(), pIFC->mnSvrPort);
+        TS_ASSERT_EQUALS(0, nRet);
+        if(nRet)
+        {
+            InfoLog( << "bind failed with " << sock.LastErrorNo() << ": " << sock.LastError() );
+            return ;
+        }
+        ftsocket cliSock;
+        nRet = sock.Accept(cliSock);
+        TS_ASSERT_EQUALS(0, nRet);
+        if(nRet)
+        {
+            InfoLog( << "accept failed with " << sock.LastErrorNo() << ": " << sock.LastError() );
+            return ;
+        }
+        InfoLog( << "accepted socket is " << cliSock );
+        TS_ASSERT_EQUALS(pIFC->mnCliPort, cliSock.remotePort());
+        pIFC->mbFinished = true;
+    }
+    static void FuncClient_ForConnect(InfoForConnect *pIFC)
+    {
+        ftsocket sock;
+        int nRet = 0;
+        nRet = sock.Connect(pIFC->mstrSvrIp.c_str(), pIFC->mnSvrPort, pIFC->mstrCliIp.c_str(), pIFC->mnCliPort);
+        TS_ASSERT_EQUALS(0, nRet);
+        if(nRet)
+        {
+            InfoLog( << "connect failed with " << sock.LastErrorNo() << ": " << sock.LastError() );
+            return ;
+        }
     }
     void testConnect()
     {
+        /* 使用本机特定端口向外发起连接 */
+        InfoForConnect ifc;
+        RunInFakeThreadT(FuncServer_ForConnect, &ifc);
+        RunInFakeThreadT(FuncClient_ForConnect, &ifc);
+        while(!ifc.mbFinished)
+        {
+            ftnetSelect(100);
+        }
+        InfoLog( << "finished." );
         
+        TS_ASSERT_EQUALS(0, GetRunningFakeThreadCount());
     }
+#ifdef HAS_FD_SEND_RECV
+    /* 测试收发文件描述符 */
+    class InfoForTestFd
+    {
+    public:
+        InfoForTestFd()
+        {
+            mstrIp = "127.0.0.1";
+            mnTransFdPort = 9999;
+            mnDataPort = 9998;
+            
+            mstrTestData = "This data is for test.";
+        }
+    public:
+        std::string mstrIp;
+        unsigned int mnTransFdPort; /* 传输fd的服务端端口 */
+        unsigned int mnDataPort; /* 用来传输数据的服务端端口 */
+        
+        std::string mstrTestData;
+        
+        bool mbFinished;
+    };
+    /* 绑定端口，accept一个连接，然后接收一个文件描述符，并向其发送一段数据，再接收一段数据 */
+    static void FuncFor_FdTransServer(InfoForTestFd *pIftf)
+    {
+        ftsocket sock;
+        int nRet = 0;
+        nRet = sock.Bind(pIftf->mstrIp.c_str(), pIftf->mnTransFdPort);
+        TS_ASSERT_EQUALS(0, nRet);
+        if(nRet)
+        {
+            InfoLog( << "bind failed with " << sock.LastErrorNo() << ": " << sock.LastError() );
+            return ;
+        }
+        ftsocket cliSock;
+        nRet = sock.Accept(cliSock);
+        TS_ASSERT_EQUALS(0, nRet);
+        if(nRet)
+        {
+            InfoLog( << "accept failed with " << sock.LastErrorNo() << ": " << sock.LastError() );
+            return ;
+        }
+        InfoLog( << "accepted socket is " << cliSock );
+        //
+        ftsocket receivedSock;
+        nRet = cliSock.RecvSocket(receivedSock);
+        TS_ASSERT_EQUALS(0, nRet);
+        if(nRet)
+        {
+            InfoLog( << "receive socket failed with " << sock.LastErrorNo() << ": " << sock.LastError() );
+            return ;
+        }
+        InfoLog( << "received socket is " << cliSock );
+        //
+        pIftf->mbFinished = true;
+    }
+    // for receive data connection
+    static void FuncFor_FdDataServer(InfoForTestFd *pIftf)
+    {
+        ftsocket sock;
+        int nRet = 0;
+        nRet = sock.Bind(pIftf->mstrIp.c_str(), pIftf->mnDataPort);
+        TS_ASSERT_EQUALS(0, nRet);
+        if(nRet)
+        {
+            InfoLog( << "bind failed with " << sock.LastErrorNo() << ": " << sock.LastError() );
+            return ;
+        }
+        ftsocket cliSock;
+        nRet = sock.Accept(cliSock);
+        TS_ASSERT_EQUALS(0, nRet);
+        if(nRet)
+        {
+            InfoLog( << "accept failed with " << sock.LastErrorNo() << ": " << sock.LastError() );
+            return ;
+        }
+        InfoLog( << "accepted socket is " << cliSock );
+        //
+        ftsocket fdsock;
+        nRet = fdsock.Connect(pIftf->mstrIp.c_str(), pIftf->mnTransFdPort);
+        TS_ASSERT_EQUALS(0, nRet);
+        if(nRet)
+        {
+            InfoLog( << "connect failed with " << sock.LastErrorNo() << ": " << sock.LastError() );
+            return ;
+        }
+        nRet = fdsock.SendSocket(cliSock);
+        TS_ASSERT_EQUALS(0, nRet);
+        if(nRet)
+        {
+            InfoLog( << "send socket failed with " << sock.LastErrorNo() << ": " << sock.LastError() );
+            return ;
+        }
+    }
+    // data client
+    static void FuncFor_DataClient(InfoForTestFd *pIftf)
+    {
+        ftsocket sock;
+        int nRet = 0;
+        nRet = sock.Connect(pIftf->mstrIp.c_str(), pIftf->mnDataPort);
+        TS_ASSERT_EQUALS(0, nRet);
+        if(nRet)
+        {
+            InfoLog( << "connect failed with " << sock.LastErrorNo() << ": " << sock.LastError() );
+            return ;
+        }
+        nRet = sock.Send(pIftf->mstrTestData.c_str(), (unsigned int) pIftf->mstrTestData.length());
+        TS_ASSERT_EQUALS(nRet, pIftf->mstrTestData.length());
+    }
+#endif // HAS_FD_SEND_RECV
     void testSend()
     {
+#if 0
+        InfoForTestFd iftf;
+        RunInFakeThreadT(FuncFor_FdTransServer, &iftf);
+        RunInFakeThreadT(FuncFor_FdDataServer, &iftf);
+        RunInFakeThreadT(FuncFor_DataClient, &iftf);
         
+        while(!iftf.mbFinished)
+        {
+            ftnetSelect(100);
+        }
+        InfoLog("finished.");
+#endif
+        
+        TS_ASSERT_EQUALS(0, GetRunningFakeThreadCount());
+    }
+    //
+    class InfoForContinue
+    {
+    public:
+        InfoForContinue()
+        {
+            mstrIp = "127.0.0.1";
+            mnPort = 9999;
+            mnMaxInt = 1 * 10 * 1024;
+            mbFinished = false;
+        }
+    public:
+        std::string mstrIp;
+        unsigned int mnPort;
+        int mnMaxInt;
+        bool mbFinished;
+    };
+    static void FuncFor_ContinueServer(InfoForContinue *pIfc)
+    {
+        ftsocket sock;
+        int nRet = 0;
+        nRet = sock.Bind(pIfc->mstrIp.c_str(), pIfc->mnPort);
+        TS_ASSERT_EQUALS(0, nRet);
+        if(nRet)
+        {
+            InfoLog( << "bind failed with " << sock.LastErrorNo() << ": " << sock.LastError() );
+            return ;
+        }
+        ftsocket cliSock;
+        nRet = sock.Accept(cliSock);
+        TS_ASSERT_EQUALS(0, nRet);
+        if(nRet)
+        {
+            InfoLog( << "accept failed with " << sock.LastErrorNo() << ": " << sock.LastError() );
+            return ;
+        }
+        int nTmp = 0;
+        int nIndex = 0;
+        for(nIndex = 0;nIndex < pIfc->mnMaxInt;++nIndex)
+        {
+            nRet = cliSock.Recv(&nTmp, sizeof(nTmp));
+            TS_ASSERT_EQUALS(sizeof(nTmp), nRet);
+            TS_ASSERT_EQUALS(nIndex, nTmp);
+            if(nRet != sizeof(nTmp) || nIndex != nTmp)
+            {
+                break;
+            }
+        }
+        pIfc->mbFinished = true;
+    }
+    static void FuncFor_ContinueClient(InfoForContinue *pIfc)
+    {
+        ftsocket sock;
+        int nRet = 0;
+        nRet = sock.Connect(pIfc->mstrIp.c_str(), pIfc->mnPort);
+        TS_ASSERT_EQUALS(0, nRet);
+        if(nRet)
+        {
+            InfoLog( << "connect failed with " << sock.LastErrorNo() << ": " << sock.LastError() );
+            return ;
+        }
+        int nIndex = 0;
+        for(nIndex = 0;nIndex < pIfc->mnMaxInt;++nIndex)
+        {
+            nRet = sock.Send(&nIndex, sizeof(nIndex));
+            TS_ASSERT_EQUALS(sizeof(nIndex), nRet);
+            if(sizeof(nIndex) != nRet)
+            {
+                break;
+            }
+        }
     }
     void testRecv()
     {
+        InfoForContinue ifc;
+        RunInFakeThreadT(FuncFor_ContinueServer, &ifc);
+        RunInFakeThreadT(FuncFor_ContinueClient, &ifc);
         
+        while(!ifc.mbFinished)
+        {
+            ftnetSelect(100);
+        }
+        
+        TS_ASSERT_EQUALS(0, GetRunningFakeThreadCount());
     }
-    // 测试性能
+    // test performance
     static void ServerForPerform(test_ftsocket *pThis, const char *szBindIp, unsigned int nBindPort, int nSendTimes)
     {
         int nRet = 0;
@@ -216,8 +492,8 @@ public:
         nRet = svrSock.Accept(tmpSock);
         TS_ASSERT_EQUALS(nRet, 0);
         InfoLog( << "accept a client." );
-        // 开始发数据，格式：长度，数据内容
-        int nSendLen = sizeof(mszSendBuf);
+        // start sending data, format: len, data
+        int nSendLen = sizeof(pThis->mszSendBuf);
         bool bOk = true;
         ftduration d;
         double dSendBytes = 0;
@@ -254,7 +530,7 @@ public:
         nRet = sock.Connect(szConnectIp, nConnectPort);
         InfoLog( << "after connect" );
         TS_ASSERT_EQUALS(nRet, 0);
-        int nRecvLen = sizeof(mszSendBuf);
+        int nRecvLen = sizeof(pThis->mszSendBuf);
         bool bOk = false;
         char *pRecvBuf = new char[nRecvLen];
         ftduration d;
@@ -298,11 +574,11 @@ public:
         InfoLog( << "recv speed is " << (dRecvBytes / (1024 * 1024)) / (d.durationSecond() + 0.000001) << " MB/s" );
         pThis->mbHasConnected = bOk ? 1 : -1;
     }
-    void testPerform() // 测试性能
+    void testPerform() // test performance
     {
         const char * szIp = "127.0.0.1";
         unsigned int nPort = 23456;
-        int nSendTimes = 1 * 10 * 1024; // 发送次数
+        int nSendTimes = 1 * 10 * 1024; // times of sending
         RunInFakeThreadT(ServerForPerform, this, szIp, nPort, nSendTimes);
         RunInFakeThreadT(ClientForPerform, this, szIp, nPort);
         int nCount = 0;
@@ -316,6 +592,8 @@ public:
         }
         TS_ASSERT_EQUALS(mbHasConnected, 1);
         TS_ASSERT_EQUALS(mnHasSvrOk, 1);
+        
+        TS_ASSERT_EQUALS(0, GetRunningFakeThreadCount());
     }
     
     // the following is for UDP test
@@ -373,8 +651,8 @@ public:
 //                InfoLog( << "sendto out " << nRet << " bytes." );
             }
         }
-        ResumeFakeThreadObjT1<int> resumeObj;
-        YieldFromFakeThread(resumeObj, (int *) NULL);
+//        ResumeFakeThreadObjT1<int> resumeObj;
+//        YieldFromFakeThread(resumeObj, (int *) NULL);
     }
     static void SomeFuncTmp(test_ftsocket *pThis)
     {
@@ -384,7 +662,7 @@ public:
     {
         std::cout << "***************************************" << std::endl;
         int nRet = 0;
-        const char szIp[] = "0.0.0.0";
+        const char szIp[] = "127.0.0.1";
 //        const char szIp[] = "192.168.4.42";
         int nPort = 60000;
         ftsocket cliSock(AF_INET, SOCK_DGRAM);
@@ -422,12 +700,95 @@ public:
             ftnetSelect(100);
         }
         nRet = 0;
+        
+        TS_ASSERT_EQUALS(0, GetRunningFakeThreadCount());
     }
-    //
+    /* 测试超时功能 */
+    static void TrySocketTimeout_Server(ftsocket svrSock)
+    {
+        ftsocket cliSock;
+        int nRet = 0;
+        nRet = svrSock.Accept(cliSock);
+        TS_ASSERT_EQUALS(0, nRet);
+        if(nRet)
+        {
+            return ;
+        }
+        cliSock.SetTimeout(2, 2);
+        ftnetbuffer buf(10000 * 1024);
+        nRet = cliSock.Send(buf);
+        if(nRet < 0)
+        {
+            TS_ASSERT_EQUALS(-3, cliSock.LastErrorNo());
+            InfoLog( << "send to " << cliSock << " failed with " << cliSock.LastErrorNo() << ": " << cliSock.LastError() );
+        }
+    }
+    static void TrySocketTimeout(bool *pbExit)
+    {
+        const char *szIp = "119.121.211.99";
+        unsigned int nPort = 12121;
+        do
+        {
+            ftsocket sock;
+            int nRet = 0;
+            sock.SetTimeout(1, 1);
+            nRet = sock.Connect(szIp, nPort);
+            if(nRet)
+            {
+//                TS_ASSERT_EQUALS(-3, sock.LastErrorNo());
+                InfoLog( << "connect to " << szIp << ":" << nPort << " failed with " << sock.LastErrorNo() << ": " << sock.LastError() );
+            }
+            sock.Close();
+            //
+            szIp = "127.0.0.1";
+            nPort = 12918;
+            ftsocket svrSock;
+            nRet = svrSock.Bind(szIp, nPort);
+            TS_ASSERT_EQUALS(0, nRet);
+            if(nRet)
+            {
+                InfoLog( << "bind on " << szIp << ":" << nPort << " failed with " << sock.LastErrorNo() << ": " << sock.LastError() );
+                break;
+            }
+            RunInFakeThreadT(TrySocketTimeout_Server, svrSock);
+            sock.SetTimeout(3, 3);
+            nRet = sock.Connect(szIp, nPort);
+            if(nRet)
+            {
+                InfoLog( << "connect to " << szIp << ":" << nPort << " failed with " << sock.LastErrorNo() << ": " << sock.LastError() );
+                break;
+            }
+            ftsocket sock2;
+            sock2.SetTimeout(3, 3);
+            nRet = sock2.Connect(szIp, nPort);
+            if(nRet)
+            {
+                InfoLog( << "connect to " << szIp << ":" << nPort << " failed with " << sock2.LastErrorNo() << ": " << sock2.LastError() );
+                break;
+            }
+            ftnetbuffer recvBuf(100*1024);
+            nRet = sock2.Recv(recvBuf);
+            TS_ASSERT_EQUALS(-3, sock2.LastErrorNo());
+            if(nRet < 0)
+            {
+                InfoLog( << "receive from " << szIp << ":" << nPort << " failed with " << sock2.LastErrorNo() << ": " << sock2.LastError() );
+                break;
+            }
+        }while(false);
+        //
+        *pbExit = true;
+    }
     void testUdpPerform()
     {
         std::cout << "***************************************" << std::endl;
+        bool bExit = false;
+        RunInFakeThreadT(TrySocketTimeout, &bExit);
+        while(!bExit)
+        {
+            ftnetSelect(100);
+        }
         
+        TS_ASSERT_EQUALS(0, GetRunningFakeThreadCount());
     }
     
     static void FuncForProtocol(test_ftsocket *pThis)
@@ -436,7 +797,16 @@ public:
     }
     void testUdpProtocol()
     {
-
+        int nTimes = 1000 * 1000 * 10;
+        ftduration d;
+        int nIndex = 0;
+        while(nIndex < nTimes)
+        {
+            ++nIndex;
+        }
+        InfoLog( << "while speed is " << (nTimes) / (d.durationSecond() + 0.000001) << " times/s" );
+        
+        TS_ASSERT_EQUALS(0, GetRunningFakeThreadCount());
     }
 };
 

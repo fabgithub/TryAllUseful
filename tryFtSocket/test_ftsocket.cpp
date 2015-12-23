@@ -20,7 +20,7 @@ int test_ftsocket_main( int argc, char *argv[] ) {
     return status;
 }
 bool suite_test_ftsocket_init = false;
-#include "/Volumes/Macintosh-HD/Test.localized/TestAllUseful/tryFtSocket/test_ftsocket.h"
+#include "./tryFtSocket/test_ftsocket.h"
 
 static test_ftsocket suite_test_ftsocket;
 

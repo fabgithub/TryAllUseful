@@ -20,9 +20,15 @@
  */
 typedef void (*ftEventCallbackFn) ( int nErrCode, void *pUserParam );
 
-int _ftnetAddReadFd_select(SOCKET sock, ftEventCallbackFn fn, void *pParam, unsigned int nTimeoutSecond = 0);
-int _ftnetAddWriteFd_select(SOCKET sock, ftEventCallbackFn fn, void *pParam, unsigned int nTimeoutSecond = 0);
+FTNET_API int _ftnetAddReadFd_select(SOCKET sock, ftEventCallbackFn fn, void *pParam, unsigned int nTimeoutSecond = 0);
+FTNET_API int _ftnetAddWriteFd_select(SOCKET sock, ftEventCallbackFn fn, void *pParam, unsigned int nTimeoutSecond = 0);
+FTNET_API int _ftnetOnFdClosed_select(SOCKET sock);
+FTNET_API void _ftnetCancel_select(SOCKET sock);
 
-int ftnetSelect(unsigned int nTimeoutMs);
+FTNET_API int ftnetSelect(unsigned int nTimeoutMs);
+FTNET_API void ftnetstop();
+
+FTNET_API void ftnet_set_max_select_fd_count(unsigned int nMax);
+FTNET_API unsigned int ftnet_get_max_select_fd_count(unsigned int nMax);
 
 #endif /* defined(__TestAllUseful__ftnetselect__) */

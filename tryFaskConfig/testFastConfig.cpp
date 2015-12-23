@@ -20,7 +20,7 @@ int testFastConfig_main( int argc, char *argv[] ) {
     return status;
 }
 bool suite_testFastConfig_init = false;
-#include "/Volumes/Macintosh-HD/Test.localized/TestAllUseful/tryFaskConfig/testFastConfig.h"
+#include "./tryFaskConfig/testFastConfig.h"
 
 static testFastConfig suite_testFastConfig;
 

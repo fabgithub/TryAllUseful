@@ -9,10 +9,17 @@
 #ifndef __TestAllUseful__ftduration__
 #define __TestAllUseful__ftduration__
 
-#include <stdio.h>
-#include <sys/time.h>
+#include "ftnet_export.h"
 
-class ftduration
+#include <string>
+#include <stdio.h>
+#ifdef WIN32
+#include <Windows.h>
+#else
+#include <sys/time.h>
+#endif
+
+class FTNET_API ftduration
 {
 public:
     ftduration();
@@ -20,10 +27,15 @@ public:
     void start();
     
     double whenStart() const;
-    double durationMs() const;
     double durationSecond() const;
+    
+    std::string StringOfStartTime() const;
 private:
+#ifdef WIN32
+    FILETIME mftStart;
+#else
     struct timeval mtStart;
+#endif
 };
 
 #endif /* defined(__TestAllUseful__ftduration__) */

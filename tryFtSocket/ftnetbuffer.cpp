@@ -50,6 +50,26 @@ public:
             mbNeedDelete = true;
         }
     }
+    void CutToRealSize(unsigned int nRealSize)
+    {
+        if(nRealSize > mnBufLen)
+        {
+            char *ptr = new char[nRealSize + 1];
+            ptr[nRealSize] = 0;
+            if(mpBuf)
+            {
+                memcpy(ptr, mpBuf, mnBufLen);
+                delete []mpBuf;
+            }
+            mpBuf = ptr;
+            mnBufLen = nRealSize;
+            mbNeedDelete = true;
+        }
+        else
+        {
+            mnBufLen = nRealSize;
+        }
+    }
 public:
     int IncreaseRef()
     {
@@ -65,6 +85,37 @@ public:
             return 0;
         }
         return mnRefCount;
+    }
+public:
+    bool operator < (const _ftnetbuffer_data &nd)
+    {
+        if(!mpBuf && !nd.mpBuf)
+        {
+            return false;
+        }
+        if(!mpBuf)
+        {
+            return true;
+        }
+        if(!nd.mpBuf)
+        {
+            return false;
+        }
+        // too are not NULL
+        unsigned int nMinLen = (mnBufLen < nd.mnBufLen ? mnBufLen : nd.mnBufLen);
+        unsigned int nIndex = 0;
+        for (; nIndex < nMinLen; ++nIndex)
+        {
+            if(mpBuf[nIndex] < nd.mpBuf[nIndex])
+            {
+                return true;
+            }
+            if(mpBuf[nIndex] > nd.mpBuf[nIndex])
+            {
+                return false;
+            }
+        }
+        return mnBufLen < nd.mnBufLen;
     }
 public:
     char *mpBuf;
@@ -114,6 +165,14 @@ ftnetbuffer::~ftnetbuffer()
 {
     mpd->DecreaseRef();
 }
+char & ftnetbuffer::operator [] (unsigned int nIndex)
+{
+    return mpd->mpBuf[nIndex];
+}
+char ftnetbuffer::operator [] (unsigned int nIndex) const
+{
+    return mpd->mpBuf[nIndex];
+}
 void ftnetbuffer::AttachBuffer(void *pBuf, unsigned int nBufLen, bool bDeleteIn_ftnetbuffer)
 {
     mpd->Free();
@@ -136,6 +195,18 @@ ftnetbuffer & ftnetbuffer::operator = (const ftnetbuffer &buf)
     mpd->IncreaseRef();
     return *this;
 }
+bool ftnetbuffer::operator < (const ftnetbuffer &buf) const
+{
+    bool bRet = false;
+    do {
+        if(mpd == buf.mpd)
+        {
+            break;
+        }
+        bRet = (*mpd) < (*buf.mpd);
+    } while (false);
+    return bRet;
+}
 bool ftnetbuffer::operator ! () const
 {
     return !mpd->mpBuf;
@@ -152,6 +223,20 @@ unsigned int ftnetbuffer::bufferLen() const
 {
     return mpd->mnBufLen;
 }
+ftnetbuffer ftnetbuffer::Clone() const
+{
+    ftnetbuffer buf(bufferLen());
+    if(mpd->mnBufLen > 0)
+    {
+        memcpy(buf.mpd->mpBuf, mpd->mpBuf, mpd->mnBufLen);
+    }
+    return buf;
+}
+void ftnetbuffer::CutToRealSize(unsigned int nRealSize)
+{
+    mpd->CutToRealSize(nRealSize);
+}
+
 unsigned int ftnetbuffer::TotalInstanceCount()
 {
     return gnTotalBufferInstanceCount;

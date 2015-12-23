@@ -9,6 +9,8 @@
 #ifndef __TestAllUseful__FastConfig__
 #define __TestAllUseful__FastConfig__
 
+#include "ftnet_export.h"
+
 #include <stdio.h>
 #include <string>
 #include <stdarg.h>
@@ -22,7 +24,7 @@ class CMarkupSTL;
 /***
  设置根节点名称
  */
-int _fcSetRootConfigElemName(const char *szRootName, const char *szDescription);
+FTNET_API int _fcSetRootConfigElemName(const char *szRootName, const char *szDescription);
 
 // -------------------------
 
@@ -30,7 +32,7 @@ class FastConfigInnerFormat;
 
 typedef std::vector<void *> _fcSlotArray; // 槽数组
 
-class FastConfigFormat
+class FTNET_API FastConfigFormat
 {
 public:
     FastConfigFormat();
@@ -50,18 +52,19 @@ public:
 };
 
 #define _fcDeclareBasicRegisterVar(type) \
-    void fcRegisterVar(FastConfigFormat &fs, type &vt, const char *szUsage, const char *szDescription, const char *szAttrName, const std::list<const char *> &pathList);
+    FTNET_API void fcRegisterVar(FastConfigFormat &fs, type &vt, const char *szUsage, const char *szDescription, const char *szAttrName, const std::list<const char *> &pathList);
 
 _fcDeclareBasicRegisterVar(int)
 _fcDeclareBasicRegisterVar(unsigned int)
 _fcDeclareBasicRegisterVar(long)
 _fcDeclareBasicRegisterVar(unsigned long)
 _fcDeclareBasicRegisterVar(bool)
+_fcDeclareBasicRegisterVar(double)
 _fcDeclareBasicRegisterVar(std::string)
 
 
-FastConfigFormat & _GetRootFE();
-class _FastConfigBase
+FTNET_API FastConfigFormat & _GetRootFE();
+class FTNET_API _FastConfigBase
 {
 public:
     virtual ~_FastConfigBase();
@@ -98,7 +101,7 @@ public:
     }
 };
 
-int _fcRegisteConfig(FastConfigInnerFormat *pRoot, const char *szUsage, const char *szDescription, const char *szAttrName, _FastConfigBase *pConfig, bool bAddList, std::list<const char *> pathList);
+int FTNET_API _fcRegisteConfig(FastConfigInnerFormat *pRoot, const char *szUsage, const char *szDescription, const char *szAttrName, _FastConfigBase *pConfig, bool bAddList, std::list<const char *> pathList);
 
 template <class ListType, class Elem>
 void __fc_inner_RegisterVar(FastConfigFormat &fs, ListType &vt, Elem &noused, const char *szUsage, const char *szDescription, const char *szAttrName, std::list<const char *> &pathList)
@@ -182,10 +185,10 @@ public:
         Init(NULL, szUsage, szDescription, szAttrName, nPathCount, vaPtr);
         va_end(vaPtr);
     }
-    void Register(FastConfigFormat *pfcf)
+    void Register(FastConfigFormat *pfcf) const
     {
         std::list<const char *> pathList;
-        std::list<std::string>::iterator iter;
+        std::list<std::string>::const_iterator iter;
         for(iter = mPathList.begin();iter != mPathList.end();++iter)
         {
             pathList.push_back(iter->c_str());
@@ -222,9 +225,10 @@ public:
         return mv;
     }
     const std::list<std::string> & PathList() const { return mPathList; }
+    const T * operator -> () const { return &mv; }
 protected:
     bool mbIsGlobal;
-    T mv;
+    mutable T mv;
     
     std::string mstrUsage;
     std::string mstrDescription;
@@ -232,6 +236,7 @@ protected:
     std::list<std::string> mPathList;
 };
 
+#define __fc_REGISTER_PATH_0()
 #define __fc_REGISTER_PATH_1(p1) pathList.push_back(p1)
 #define __fc_REGISTER_PATH_2(p1, p2) __fc_REGISTER_PATH_1(p1); pathList.push_back(p2)
 #define __fc_REGISTER_PATH_3(p1, p2, p3) __fc_REGISTER_PATH_2(p1, p2); pathList.push_back(p3)
@@ -250,12 +255,14 @@ protected:
 #define fc_IMPLEMENT_STRUCT_BEGIN(type) \
     void fcRegisterVar(FastConfigFormat &fs, type &vt, const char *szUsage, const char *szDescription, const char *szAttrName, std::list<const char *> &pathList) {
 
-#define fc_IMPLEMENT_STRUCT_MEMBER(member, usage, desc, szAttrName, nPathCount, ...) \
-    __fc_REGISTER_PATH_##nPathCount(__VA_ARGS__); \
+#define fc_IMPLEMENT_STRUCT_MEMBER(member, usage, desc, szAttrName, nPathCount, pathArray) \
+    __fc_REGISTER_PATH_##nPathCount pathArray; \
     fcRegisterVar(fs, vt.member, !(szUsage&&szUsage[0]) ? NULL : usage, !(szDescription&&szDescription[0]) ? NULL : desc, szAttrName, pathList); \
     __fc_REGISTER_PATH_POP(nPathCount);
-#define fc_IMPLEMENT_STRUCT_MEMBER_FromAttribute(member, usage, desc, szAttrName) \
-    fcRegisterVar(fs, vt.member, !(szUsage&&szUsage[0]) ? NULL : usage, !(szDescription&&szDescription[0]) ? NULL : desc, szAttrName, pathList);
+#define fc_IMPLEMENT_STRUCT_MEMBER_FromAttribute(member, usage, desc, szAttrName, nPathCount, pathArray) \
+    __fc_REGISTER_PATH_##nPathCount pathArray; \
+    fcRegisterVar(fs, vt.member, !(szUsage&&szUsage[0]) ? NULL : usage, !(szDescription&&szDescription[0]) ? NULL : desc, szAttrName, pathList); \
+    __fc_REGISTER_PATH_POP(nPathCount);
 
 #define fc_IMPLEMENT_STRUCT_END }
 
@@ -267,13 +274,13 @@ template <class FastConfigFormatStruct>
 int fcParseXml(const char *szXml, const FastConfigFormatStruct &fs);
 
 template <class FastConfigStructAddress, class Type>
-int fcSetNewBindAddress(FastConfigStructAddress &addr, Type &v);
+FTNET_API int fcSetNewBindAddress(FastConfigStructAddress &addr, Type &v);
 /***
  用xml文本初始化配置项
  */
 //int fcInitConfig(const char *szXmlText, FastConfigFormat &fcf);
-extern int (*fcInitConfig) (const char *szXmlText, FastConfigFormat &fcf);
-void fcSetUseRapidXml(bool bUse);
+FTNET_API extern int (*fcInitConfig) (const char *szXmlText, FastConfigFormat &fcf);
+FTNET_API void fcSetUseRapidXml(bool bUse);
 // 通用解析函数
 template <class T1>
 class CommonParser1
@@ -287,8 +294,9 @@ public:
     {
         int nRet = 0;
         std::list<const char *> pathList;
-        fcRegisterVar(mfcf, p1, NULL, NULL, NULL, pathList);
-        nRet = fcInitConfig(szXml, mfcf);
+        FastConfigFormat fs(mfcf);
+        fcRegisterVar(fs, p1, NULL, NULL, NULL, pathList);
+        nRet = fcInitConfig(szXml, fs);
         return nRet;
     }
 protected:

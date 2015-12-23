@@ -17,24 +17,30 @@ section .data
 
 section .text
 
+global _FakeThread_GetRSP
+
+
+global _FakeThread_StartWithRsp
+global _FakeThread_YieldWithMainRsp
+global _FakeThread_ResumeWithThreadRsp
+global _FakeThread_GetItemPtr
+
 global FakeThread_GetRSP
-
-
+global FakeThread_GetItemPtr
 global FakeThread_StartWithRsp
 global FakeThread_YieldWithMainRsp
 global FakeThread_ResumeWithThreadRsp
-global FakeThread_GetItemPtr
 
 FakeThread_GetRSP:
+_FakeThread_GetRSP:
     mov rax, rsp
     ret
 
-; FakeThreadItem * FakeThread_GetItemPtr(long long llMainRsp);
-
 FakeThread_GetItemPtr:
+_FakeThread_GetItemPtr:
     push rdx
     mov rdx, rsp
-    mov rsp, rcx ;
+    mov rsp, rdi
     sub rsp, 8
     pop rax
     mov rsp, rdx
@@ -46,8 +52,6 @@ _i_SaveRegister:
     pop rcx ; 先把返回地址取出
     push rbx
     push rbp
-    push rsi
-    push rdi
 
     push r12
     push r13
@@ -66,26 +70,23 @@ _i_RestoreRegister:
     pop r13
     pop r12
 
-    pop rdi
-    pop rsi
     pop rbp
     pop rbx
     push rcx ; 压入返回地址
     ret
 
-; FakeThreadItem * FakeThread_StartWithRsp(long long llNewRsp, void (*pfunc) (), FakeThreadItem *pItem, long long *pSaveMainRsp )
-
 FakeThread_StartWithRsp:
-    mov [r9], rsp ; 保存main rsp
-    push r8       ; 保存pItem
+_FakeThread_StartWithRsp:
+    mov [rcx], rsp ; 保存main rsp
+    push rdx       ; 保存pItem
     push rbp
 
     mov rax, rsp
-    mov rsp, rcx ; 第一个参数llNewRsp
+    mov rsp, rdi
     push rax
     push rbp
 
-    call rdx ; 第二个参数
+    call rsi
 
     pop rbp
     pop rax
@@ -95,26 +96,26 @@ FakeThread_StartWithRsp:
     pop rax
     ret
 
-; FakeThreadResumeParam * FakeThread_YieldWithMainRsp(long long llMainRsp, long long *pThreadRsp);
 FakeThread_YieldWithMainRsp:
-    mov [rdx], rsp
+_FakeThread_YieldWithMainRsp:
+    mov [rsi], rsp
     push rbp
 
-    mov rsp, rcx
+    mov rsp, rdi
     sub rsp, 16
     pop rbp
     pop rax
     ret
 
 ; resume 函数
-; void FakeThread_ResumeWithThreadRsp(long long llThreadRsp, long long *pSaveMainRsp, FakeThreadItem *pItem, FakeThreadResumeParam *pResumeParam)
 FakeThread_ResumeWithThreadRsp:
-    mov [rdx], rsp
-    push r8
+_FakeThread_ResumeWithThreadRsp:
+    mov [rsi], rsp
+    push rdx
     push rbp
 
-    mov rsp, rcx
+    mov rsp, rdi
     sub rsp, 8
     pop rbp
-    mov rax, r9 ; 保存返回值
+    mov rax, rcx ; 保存返回值
     ret

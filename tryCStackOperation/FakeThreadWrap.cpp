@@ -9,12 +9,31 @@
 #include "FakeThreadWrap.h"
 
 #include <string>
-#include <pthread.h>
-#include <unistd.h>
+#ifdef WIN32
+    #include <Windows.h>
+#else
+    #include <pthread.h>
+    #include <unistd.h>
+#endif
+
 #include <list>
+#include <set>
 
 #include <stdio.h>
 #include <stdlib.h>
+
+#if __x86_64__ || defined(_WIN64)
+    typedef long long FtRspType;
+#else
+    typedef unsigned int FtRspType;
+#endif
+
+FtStackInfo::FtStackInfo()
+: mnLine(-1)
+{}
+FtStackInfo::FtStackInfo(const std::string &strName, const std::string &strFile, int nLine)
+: mstrName(strName), mstrFile(strFile), mnLine(nLine)
+{}
 
 class FakeThreadItem
 {
@@ -36,6 +55,7 @@ public:
         mbGotResumeObj = false;
         mnState = 0;
         mpResumeParam = NULL;
+        mStackList.clear();
     }
     // 重置以备复用，注意，mllOrignRsp不能重置
     void Clear()
@@ -49,16 +69,18 @@ public:
         mftp = NULL;
         mpParam = NULL;
         mpResumeParam = NULL;
+        mStackList.clear();
     }
 public:
-    long long mllRsp;
-    long long mllOrignRsp;
-    long long mllFromRsp; // 是从哪个协程的rsp过来的
+    FtRspType mllRsp;
+    FtRspType mllOrignRsp;
+    FtRspType mllFromRsp; // 是从哪个协程的rsp过来的
     bool mbGotResumeObj; // 是否获取了用于resume的对象，如果没有，则不能yield
     int mnState; // 当前状态, 0表示未运行过，1表示被yield, 2表示正在运行，9表示运行结束
     
     bool mbInitialised;
     std::string mstrName;
+    FtStackInfoList mStackList;
     
     FakeThreadProc mftp;
     void *mpParam;
@@ -68,18 +90,16 @@ public:
 };
 
 // ==============
-extern "C" FakeThreadItem * FakeThread_StartWithRsp(long long llNewRsp, void (*pfunc) (), FakeThreadItem *pItem, long long *pSaveMainRsp );
-extern "C" FakeThreadResumeParam * FakeThread_YieldWithMainRsp(long long llMainRsp, long long *pThreadRsp);
-extern "C" FakeThreadItem * FakeThread_GetItemPtr(long long llMainRsp);
-extern "C" void FakeThread_ResumeWithThreadRsp(long long llThreadRsp, long long *pSaveMainRsp, FakeThreadItem *pItem, FakeThreadResumeParam *pResumeParam);
+extern "C" FakeThreadItem * FakeThread_StartWithRsp(FtRspType llNewRsp, void (*pfunc) (), FakeThreadItem *pItem, FtRspType *pSaveMainRsp );
+extern "C" FakeThreadResumeParam * FakeThread_YieldWithMainRsp(FtRspType llMainRsp, FtRspType *pThreadRsp);
+extern "C" FakeThreadItem * FakeThread_GetItemPtr(FtRspType llMainRsp);
+extern "C" void FakeThread_ResumeWithThreadRsp(FtRspType llThreadRsp, FtRspType *pSaveMainRsp, FakeThreadItem *pItem, FakeThreadResumeParam *pResumeParam);
 // ==============
 
-extern "C" long long FakeThread_GetRSP();
+extern "C" FtRspType FakeThread_GetRSP();
 
 // ================================
-static long long gllRspForFakeThread = 0; // 保存从哪个rsp过来的
-
-#define USE_REAL_THREAD_STACK 0
+static FtRspType gllRspForFakeThread = 0; // 保存从哪个rsp过来的
 
 #if USE_REAL_THREAD_STACK
 static void * FetchStackThreadProc(void *pParam)
@@ -96,15 +116,20 @@ static void * FetchStackThreadProc(void *pParam)
 #endif
 
 typedef std::list<FakeThreadItem *> FakeThreadItemList;
-static FakeThreadItemList gFakeThreadItemList;
+static FakeThreadItemList gFakeThreadItemFreeList;
+
+typedef std::set<FakeThreadItem *> FakeThreadItemSet;
+static FakeThreadItemSet gFakeThreadRunningSet;
+
+#define USE_REAL_THREAD_STACK 0
 
 FakeThreadItem * NewFakeThreadItem(const std::string &strName, FakeThreadProc ftp, void *pParam)
 {
     FakeThreadItem *pRet = NULL;
-    if(!gFakeThreadItemList.empty())
+    if(!gFakeThreadItemFreeList.empty())
     {
-        pRet = gFakeThreadItemList.front();
-        gFakeThreadItemList.pop_front();
+        pRet = gFakeThreadItemFreeList.front();
+        gFakeThreadItemFreeList.pop_front();
         pRet->ResetForResue(strName, ftp, pParam);
     }
     else
@@ -118,30 +143,36 @@ FakeThreadItem * NewFakeThreadItem(const std::string &strName, FakeThreadProc ft
             usleep(1 * 1000);
         }
 #else
-        static int gnStackSize = 200 * 1024; // 分配100KB
+        static int gnStackSize = 100 * 1024; // 分配100KB
         char *pNewStack = new char[gnStackSize];
-        pRet->mllOrignRsp = pRet->mllRsp = (long long) (pNewStack + gnStackSize - 1024); // 实际使用99KB
+        pRet->mllOrignRsp = pRet->mllRsp = (FtRspType) (pNewStack + gnStackSize - 1024); // 实际使用99KB
         pRet->mbInitialised = true;
 #endif
     }
+    gFakeThreadRunningSet.insert(pRet);
+    pRet->mStackList.clear();
+    pRet->mStackList.push_back(FtStackInfo(strName.c_str(), "", -1));
     return pRet;
 }
 
 static void FakeThread_MainFunc()
 {
     FakeThreadItem *pItem = FakeThread_GetItemPtr(gllRspForFakeThread);
+    pItem->mllFromRsp = gllRspForFakeThread; // 保存从哪里来的
+
     pItem->mftp(pItem->mpParam);
     
     pItem->mllRsp = pItem->mllOrignRsp; // 准备复用
     gllRspForFakeThread = pItem->mllFromRsp;
     
     pItem->Clear();
-    gFakeThreadItemList.push_back(pItem);
+    gFakeThreadItemFreeList.push_back(pItem);
+    gFakeThreadRunningSet.erase(pItem);
 
-    long long saveRsp = gllRspForFakeThread;
+    FtRspType saveRsp = gllRspForFakeThread;
     gllRspForFakeThread = 0; // 表示已经回到了源线程
     
-    long long tmpRsp = 0;
+    FtRspType tmpRsp = 0;
     FakeThread_YieldWithMainRsp(saveRsp, &tmpRsp);
 }
 /***
@@ -152,10 +183,10 @@ static void FakeThread_MainFunc()
 int RunFuncInFakeThread(FakeThreadProc ftp, void *pParam)
 {
     FakeThreadItem * pSI = NULL;
-    pSI = NewFakeThreadItem("first", ftp, pParam);
+    pSI = NewFakeThreadItem("", ftp, pParam);
     
-    long long oldPreRsp = gllRspForFakeThread; // 当前的前一协程的rsp
-    long long savedRsp = pSI->mllRsp;
+    FtRspType oldPreRsp = gllRspForFakeThread; // 当前的前一协程的rsp
+    FtRspType savedRsp = pSI->mllRsp;
     pSI->mllRsp = 0; // 置成0表示正在运行中
     pSI->mllFromRsp = FakeThread_GetRSP(); // 从哪个rsp过来的
     FakeThread_StartWithRsp(savedRsp, FakeThread_MainFunc, pSI, &gllRspForFakeThread);
@@ -170,7 +201,7 @@ int YieldFromFakeThread(FakeThreadResumeParam **pOutResumeParam)
     {
         return -1;
     }
-    long long saveRsp = gllRspForFakeThread;
+    FtRspType saveRsp = gllRspForFakeThread;
     FakeThreadItem *pItem = FakeThread_GetItemPtr(saveRsp);
     if(!pItem->mbGotResumeObj)
     {
@@ -179,6 +210,8 @@ int YieldFromFakeThread(FakeThreadResumeParam **pOutResumeParam)
     gllRspForFakeThread = pItem->mllFromRsp; // 设置从哪个协程过来的
     
     FakeThreadResumeParam *pYieldParam = FakeThread_YieldWithMainRsp(saveRsp, &pItem->mllRsp);
+    pItem->mllFromRsp = gllRspForFakeThread; // 保存从哪里来的
+    
     pItem->mbGotResumeObj = false;
     if(pOutResumeParam)
     {
@@ -199,9 +232,9 @@ int ResumeToFakeThread(FakeThreadItem * pSI)
         return -2;
     }
     // 保存本伪线程是从哪个rsp伪线程resume过来的，以便往回yield
-    long long llSaveLastWhoResumeMe = gllRspForFakeThread;
+    FtRspType llSaveLastWhoResumeMe = gllRspForFakeThread;
     //
-    long long savedRsp = pSI->mllRsp;
+    FtRspType savedRsp = pSI->mllRsp;
     pSI->mllRsp = 0; // 置成0表示正在运行中
     pSI->mllFromRsp = FakeThread_GetRSP();
     FakeThread_ResumeWithThreadRsp(savedRsp, &gllRspForFakeThread, pSI, pSI->mpResumeParam);
@@ -225,8 +258,12 @@ public:
     }
     bool operator ! () const
     {
-        return mpSI;
+        return mpSI == NULL;
     }
+	bool IsValid() const
+	{
+		return mpSI != NULL;
+	}
 public:
     void AddRef()
     {
@@ -307,7 +344,11 @@ int FakeThreadResumeObject::operator () (FakeThreadResumeParam *pResumeParam) co
     {
         return -1;
     }
-    return mpResumeObj->Resume(pResumeParam);
+    RealFkResumeObj *pTmp = mpResumeObj;
+    mpResumeObj = NULL;
+    int nRet = pTmp->Resume(pResumeParam);
+    pTmp->DecreaseRef();
+    return nRet;
 }
 bool FakeThreadResumeObject::operator ! () const
 {
@@ -315,7 +356,7 @@ bool FakeThreadResumeObject::operator ! () const
 }
 bool FakeThreadResumeObject::IsValid() const
 {
-    return mpResumeObj && !(*mpResumeObj);
+	return mpResumeObj && (mpResumeObj->IsValid());
 }
 void FakeThreadResumeObject::Detach()
 {
@@ -332,12 +373,17 @@ FakeThreadResumeObject GetResumeObjectForFakeThread()
         FakeThreadResumeObject invalid(NULL);
         return invalid;
     }
-    long long saveRsp = gllRspForFakeThread;
+    FtRspType saveRsp = gllRspForFakeThread;
     FakeThreadItem *pItem = FakeThread_GetItemPtr(saveRsp);
     FakeThreadResumeObject retObj(new RealFkResumeObj(pItem));
     return retObj;
 }
+unsigned int GetRunningFakeThreadCount()
+{
+    return (unsigned int) gFakeThreadRunningSet.size();
+}
 
+#ifndef WIN32
 #include <execinfo.h>
 void FakeThreadPrintCallStack(void)
 {
@@ -349,4 +395,85 @@ void FakeThreadPrintCallStack(void)
         printf("%s\n", strs[i]);
     }
     free(strs);
+}
+#endif
+
+// -------------------------------------------------
+// for debug
+FTNET_API int FakeThreadSetName(const char *szFakeThreadName)
+{
+    if(!gllRspForFakeThread)
+    {
+        return -1;
+    }
+    FakeThreadItem *pItem = FakeThread_GetItemPtr(gllRspForFakeThread);
+    if(pItem->mstrName.size() > 0 && pItem->mstrName.size() < 50)
+    {
+        pItem->mstrName += szFakeThreadName;
+    }
+    else
+    {
+        pItem->mstrName = szFakeThreadName;
+    }
+    if(!pItem->mStackList.empty())
+    {
+        pItem->mStackList.front().mstrName = pItem->mstrName;
+    }
+    else
+    {
+        pItem->mStackList.push_front(FtStackInfo(pItem->mstrName, "", -1));
+    }
+    return 0;
+}
+FTNET_API const char *FakeThreadGetName(bool bNullWhenInMain)
+{
+    if(!gllRspForFakeThread)
+    {
+        return bNullWhenInMain ? NULL : "";
+    }
+    FakeThreadItem *pItem = FakeThread_GetItemPtr(gllRspForFakeThread);
+    return pItem->mstrName.c_str();
+}
+FakeThreadStackHelper::FakeThreadStackHelper(const char *szFuncName, const char *szFile, int nLine)
+{
+    if(!gllRspForFakeThread)
+    {
+        return ;
+    }
+    FakeThreadItem *pItem = FakeThread_GetItemPtr(gllRspForFakeThread);
+    FtStackInfo si(szFuncName, szFile, nLine);
+    pItem->mStackList.push_back(si);
+}
+FakeThreadStackHelper::~FakeThreadStackHelper()
+{
+    if(!gllRspForFakeThread)
+    {
+        return ;
+    }
+    FakeThreadItem *pItem = FakeThread_GetItemPtr(gllRspForFakeThread);
+    if(pItem->mStackList.size() <= 1)
+    {
+        return ;
+    }
+    pItem->mStackList.pop_back();
+}
+FTNET_API FtStackInfoList FakeThreadGetStack()
+{
+    FtStackInfoList st;
+    if(!gllRspForFakeThread)
+    {
+        return st;
+    }
+    FakeThreadItem *pItem = FakeThread_GetItemPtr(gllRspForFakeThread);
+    return pItem->mStackList;
+}
+FTNET_API FakeThreadInfoList FakeThreadGetAllStack()
+{
+    FakeThreadInfoList ftil;
+    FakeThreadItemSet::iterator iter;
+    for (iter = gFakeThreadRunningSet.begin(); iter != gFakeThreadRunningSet.end(); ++iter)
+    {
+        ftil.push_back((*iter)->mStackList);
+    }
+    return ftil;
 }
